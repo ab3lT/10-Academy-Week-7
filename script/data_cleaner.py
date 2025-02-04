@@ -1,246 +1,232 @@
-
-import pandas as pd
 import re
 import os
+import sys
 import emoji
-from logger import Logger
+import pandas as pd
+from typing import Dict
 
-class DataCleaner:
+# Setup logger for cleaning operations
+sys.path.append(os.path.join(os.path.abspath(__file__), '..', '..', '..'))
+from scripts.utils.logger import setup_logger
+
+logger = setup_logger("cleaning")
+
+# ==========================================
+# Helper Functions for Cleaning Operations
+# ==========================================
+
+
+def normalize_amharic_text(text: str, diacritics_map: Dict[str, str]) -> str:
     """
-    A class to clean and preprocess Telegram data from a CSV file.
-    
-    Attributes:
-        CHANNEL_USERNAME (str): Column name for channel usernames.
-        MESSAGE (str): Column name for messages.
-        DATE (str): Column name for dates.
-        ID (str): Column name for unique identifiers.
-        Media_path (str): Column name for media paths.
-        logger (Logger): Custom logger instance for logging messages.
-        allowed_characters (RegexPattern): Regex pattern to allow specific characters in messages.
+    Replaces Amharic diacritics with their base forms based on the given map.
     """
-    CHANNEL_ID = 'channel_id'
-    CHANNEL_TITLE = 'channel_title'
-    CHANNEL_USERNAME = 'channel_username'
-    MESSAGE = 'message'
-    DATE = 'date'
-    ID = 'message_id'
-    Media_path = 'media_path'
+    if not isinstance(text, str):
+        logger.warning("Input text is not a string. Skipping normalization.")
+        return text
+
+    for diacritic, base_char in diacritics_map.items():
+        text = text.replace(diacritic, base_char)
     
-    def __init__(self):
-        """
-        Initializes the DataCleaner with a custom logger instance and allowed character patterns.
-        """
-        self.logger = Logger(log_file='../data/cleaner_log.log')
-        self.allowed_characters = re.compile(r'[^a-zA-Z0-9\s.,!?;:()[]@&]+')
+    logger.debug("Normalized Amharic diacritics.")
+    return text
 
-    def load_data(self, file_path):
-        """
-        Loads data from a CSV file into a pandas DataFrame.
+def remove_non_amharic_characters(text: str) -> str:
+    """
+    Removes characters that are not part of the Amharic Unicode block or spaces.
+    """
+    # pattern = re.compile(r'[^\u1200-\u137F\s]') # Retains Amharic script only
+    pattern = re.compile(r'[^\u1200-\u137F0-9\s]')  # Retains Amharic script and numbers
+    result = pattern.sub('', text)
+    logger.debug("Removed non-Amharic characters.")
+    return result
 
-        Args:
-            file_path (str): The path to the CSV file to be loaded.
+def remove_punctuation(text: str) -> str:
+    """
+    Removes Amharic punctuation and replaces it with a space.
+    """
+    pattern = re.compile(r'[፡።፣፤፥፦፧፨]+')
+    result = pattern.sub(' ', text)
+    logger.debug("Removed Amharic punctuation.")
+    return result
 
-        Returns:
-            pd.DataFrame: DataFrame containing the loaded data, or an empty DataFrame if loading fails.
-        """
-        try:
-            df = pd.read_csv(file_path)
-            self.logger.info(f"Data loaded successfully. Shape: {df.shape}")
-            return df
-        except FileNotFoundError:
-            self.logger.error("File not found. Please check the file path.")
-            return pd.DataFrame()  # Return empty DataFrame for consistency
-        except Exception as e:
-            self.logger.error(f"An error occurred while loading data: {str(e)}")
-            return pd.DataFrame()
+def remove_emojis(text: str) -> str:
+    """
+    Removes emojis from the text.
+    """
+    emoji_pattern = re.compile(
+        "[" 
+        "\U0001F600-\U0001F64F"
+        "\U0001F300-\U0001F5FF"
+        "\U0001F680-\U0001F6FF"
+        "\U0001F700-\U0001F77F"
+        "\U0001F780-\U0001F7FF"
+        "\U0001F800-\U0001F8FF"
+        "\U0001F900-\U0001F9FF"
+        "\U0001FA00-\U0001FA6F"
+        "\U0001FA70-\U0001FAFF"
+        "\U00002702-\U000027B0"
+        "\U000024C2-\U0001F251"
+        "]+", flags=re.UNICODE
+    )
+    result = emoji_pattern.sub('', text)
+    logger.debug("Removed emojis.")
+    return result
 
-    def remove_duplicates(self, df, image_directory):
-        """
-        Removes duplicate entries from the DataFrame and corresponding images from the specified directory.
+def remove_repeated_characters(text: str) -> str:
+    """
+    Collapses consecutive repeated characters into a single instance.
+    """
+    result = re.sub(r'(.)\1+', r'\1', text)
+    logger.debug("Removed repeated characters.")
+    return result
 
-        Args:
-            df (pd.DataFrame): DataFrame from which duplicates are to be removed.
-            image_directory (str): Directory containing images corresponding to messages.
+def remove_numbers(text: str) -> str:
+    """
+    Removes numeric characters from the text.
+    """
+    result = re.sub(r'\d+', '', text)
+    logger.debug("Removed numbers.")
+    return result
 
-        Returns:
-            pd.DataFrame: DataFrame without duplicates.
-        """
-        duplicates = df[df.duplicated(subset=self.ID, keep='first')]
-        df = df.drop_duplicates(subset=self.ID, keep='first')
-        self.logger.info(f"Duplicates removed. New shape: {df.shape}")
-        self._remove_duplicate_images(duplicates, image_directory)
-        return df
+def remove_urls(text: str) -> str:
+    """
+    Removes URLs from the text.
+    """
+    result = re.sub(r'http\S+|www\S+', '', text)
+    logger.debug("Removed URLs.")
+    return result
 
-    def _remove_duplicate_images(self, duplicates, image_directory):
-        """
-        Removes images that correspond to duplicate entries.
+def normalize_spaces(text: str) -> str:
+    """
+    Normalize spaces in the text.
+    """
+    # Normalize Multiple whitespace characters and trim
+    result = ' '.join(text.split()).strip()
+    # result = re.sub(r'\s+', ' ', text).strip()
 
-        Args:
-            duplicates (pd.DataFrame): DataFrame containing duplicate entries.
-            image_directory (str): Directory where images are stored.
-        """
-        for index, row in duplicates.iterrows():
-            channel_username = row[self.CHANNEL_USERNAME]
-            message_id = row[self.ID]
-            image_name = f"{channel_username}_{message_id}.jpg"
-            image_path = os.path.join(image_directory, image_name)
+    logger.debug("Normalize spaces.")
+    return result
 
-            if os.path.exists(image_path):
-                try:
-                    os.remove(image_path)
-                    self.logger.info(f"Removed duplicate image: {image_path}")
-                except Exception as e:
-                    self.logger.error(f"Error removing image: {image_path}. Exception: {str(e)}")
+def extract_emojis(text):
+    """ Extract emojis from text, return 'No emoji' if none found. """
+    emojis = ''.join(c for c in text if c in emoji.EMOJI_DATA)
+    return emojis if emojis else "No emoji"
 
-    def handle_missing_values(self, df):
-        """
-        Handles missing values in the DataFrame by filling them with placeholders.
+def remove_emojis(text):
+    """ Remove emojis from the message text. """
+    return ''.join(c for c in text if c not in emoji.EMOJI_DATA)
 
-        Args:
-            df (pd.DataFrame): DataFrame in which missing values are to be handled.
+def extract_youtube_links(text):
+    """ Extract YouTube links from text, return 'No YouTube link' if none found. """
+    youtube_pattern = r"(https?://(?:www\.)?(?:youtube\.com|youtu\.be)/[^\s]+)"
+    links = re.findall(youtube_pattern, text)
+    return ', '.join(links) if links else "No YouTube link"
 
-        Returns:
-            pd.DataFrame: DataFrame with missing values filled.
-        """
-        df.fillna({
-            self.CHANNEL_USERNAME: 'Unknown',
-            self.MESSAGE: 'N/A',
-            self.DATE: '1970-01-01 00:00:00'
-        }, inplace=True)
-        self.logger.info("Missing values handled.")
-        return df
+def remove_youtube_links(text):
+    """ Remove YouTube links from the message text. """
+    youtube_pattern = r"https?://(?:www\.)?(?:youtube\.com|youtu\.be)/[^\s]+"
+    return re.sub(youtube_pattern, '', text).strip()
 
-    def standardize_formats(self, df):
-        """
-        Standardizes the formats of specific columns in the DataFrame.
+def clean_text(text):
+    """ Standardize text by removing newline characters and unnecessary spaces. """
+    if pd.isna(text):
+        return "No Message"
+    return re.sub(r'\n+', ' ', text).strip()
 
-        Args:
-            df (pd.DataFrame): DataFrame containing the data to be standardized.
+def clean_text_pipeline(text: str) -> str:
+    """
+    Orchestrates the text cleaning process by applying multiple cleaning functions.
+    """
+    if not text:
+        logger.info("Received empty input text.")
+        return ""
 
-        Returns:
-            pd.DataFrame: DataFrame with standardized formats.
-        """
-        # Convert Date column to datetime
-        if self.DATE in df.columns:
-            df[self.DATE] = pd.to_datetime(df[self.DATE], errors='coerce')
+    # Define the Amharic diacritics map
+    amharic_diacritics_map = {
+        'ኀ': 'ሀ', 'ኁ': 'ሁ', 'ኂ': 'ሂ', 'ኃ': 'ሀ', 'ኄ': 'ሄ', 'ኅ': 'ህ', 'ኆ': 'ሆ',
+        'ሐ': 'ሀ', 'ሑ': 'ሁ', 'ሒ': 'ሂ', 'ሓ': 'ሀ', 'ሔ': 'ሄ', 'ሕ': 'ህ', 'ሖ': 'ሆ',
+        'ሠ': 'ሰ', 'ሡ': 'ሱ', 'ሢ': 'ሲ', 'ሣ': 'ሳ', 'ሤ': 'ሴ', 'ሥ': 'ስ', 'ሦ': 'ሶ',
+        'ዐ': 'አ', 'ዑ': 'ኡ', 'ዒ': 'ኢ', 'ዓ': 'አ', 'ዔ': 'ኤ', 'ዕ': 'እ', 'ዖ': 'ኦ', 'ኣ': 'አ'
+    }
 
-        # Clean and format message content
-        if self.MESSAGE in df.columns:
-            df[self.MESSAGE] = df[self.MESSAGE].apply(self.clean_message_content).str.lower().str.strip()
+    # Apply cleaning steps
+    text = normalize_amharic_text(text, amharic_diacritics_map)
+    text = remove_non_amharic_characters(text)
+    # text = remove_punctuation(text)
+    text = remove_emojis(text)
+    text = remove_repeated_characters(text)
+    text = remove_urls(text)
+    # text = remove_numbers(text)
+    text = normalize_spaces(text)
 
-        # Clean and format channel names
-        if self.CHANNEL_USERNAME in df.columns:
-            df[self.CHANNEL_USERNAME] = df[self.CHANNEL_USERNAME].str.replace(r'[^a-zA-Z0-9\s]', '', regex=True).str.strip().str.title()
+    logger.debug("Final text cleaning completed.")
+    return text
 
-        self.logger.info("Formats standardized.")
-        return df
 
-    def clean_message_content(self, text):
-        """
-        Cleans the message content by removing unwanted characters, including emojis.
+def clean_dataframe(df):
+    """ Perform all cleaning and standardization steps while avoiding SettingWithCopyWarning. """
+    try:
+        df = df.drop_duplicates(subset=["ID"]).copy()  # Ensure a new copy
+        logger.info("Duplicates removed from dataset.")
 
-        Args:
-            text (str): The message content to be cleaned.
+        # Convert Date to datetime format, replacing NaT with None
+        df.loc[:, 'Date'] = pd.to_datetime(df['Date'], errors='coerce')
+        df.loc[:, 'Date'] = df['Date'].where(df['Date'].notna(), None)
+        logger.info("Date column formatted to datetime.")
 
-        Returns:
-            str: The cleaned message content.
-        """
-        # Remove emojis
-        text = emoji.replace_emoji(text, replace='')  # Remove emojis
-        # Remove unwanted characters but keep specific patterns intact
-        text = re.sub(self.allowed_characters, '', text)  # Remove unwanted characters
-        # Remove extra whitespace (including tabs and newlines)
-        text = re.sub(r'\s+', ' ', text)  # Replace multiple spaces with a single space
+        # Convert 'ID' to integer for PostgreSQL BIGINT compatibility
+        df.loc[:, 'ID'] = pd.to_numeric(df['ID'], errors="coerce").fillna(0).astype(int)
+
+        # Fill missing values
+        df.loc[:, 'Message'] = df['Message'].fillna("No Message")
+        df.loc[:, 'Media Path'] = df['Media Path'].fillna("No Media")
+        logger.info("Missing values filled.")
+
+        # Standardize text columns
+        df.loc[:, 'Channel Title'] = df['Channel Title'].str.strip()
+        df.loc[:, 'Channel Username'] = df['Channel Username'].str.strip()
+        df.loc[:, 'Message'] = df['Message'].apply(clean_text)
+        df.loc[:, 'Media Path'] = df['Media Path'].str.strip()
+        logger.info("Text columns standardized.")
+
+        # Extract emojis and store them in a new column
+        df.loc[:, 'emoji_used'] = df['Message'].apply(extract_emojis)
+        logger.info("Emojis extracted and stored in 'emoji_used' column.")
         
-        return text.strip()
+        # Remove emojis from message text
+        df.loc[:, 'Message'] = df['Message'].apply(remove_emojis)
 
-    def validate_data(self, df):
-        """
-        Validates the cleaned data for inconsistencies and removes invalid entries.
+        # Extract YouTube links into a separate column
+        df.loc[:, 'youtube_links'] = df['Message'].apply(extract_youtube_links)
+        logger.info("YouTube links extracted and stored in 'youtube_links' column.")
 
-        Args:
-            df (pd.DataFrame): DataFrame to validate.
+        # Remove YouTube links from message text
+        df.loc[:, 'Message'] = df['Message'].apply(remove_youtube_links)
 
-        Returns:
-            pd.DataFrame: Validated DataFrame with inconsistencies removed.
-        """
-        # Drop rows with invalid Dates
-        df = df.dropna(subset=[self.DATE])
+        # Rename columns to match PostgreSQL schema
+        df = df.rename(columns={
+            "Channel Title": "channel_title",
+            "Channel Username": "channel_username",
+            "ID": "message_id",
+            "Message": "message",
+            "Date": "message_date",
+            "Media Path": "media_path",
+            "emoji_used": "emoji_used",
+            "youtube_links": "youtube_links"
+        })
 
-        # Validate message content length
-        if self.MESSAGE in df.columns:
-            df = df[df[self.MESSAGE].str.len() <= 1000]
-
-        # Validate channel names
-        df = df[df[self.CHANNEL_USERNAME].str.len() > 0]
-
-        self.logger.info("Data validation completed.")
+        logger.info("Data cleaning completed successfully.")
         return df
+    except Exception as e:
+        logger.error(f"Data cleaning error: {e}")
+        raise
 
-    def save_cleaned_data(self, df, file_path):
-        """
-        Saves the cleaned data to a CSV file with standardized SQL column names.
-
-        Args:
-            df (pd.DataFrame): DataFrame containing the cleaned data.
-            file_path (str): Original path of the CSV file to determine save location.
-        """
-        # Define the mapping of raw column names to SQL-friendly names
-        column_mapping = {
-            self.CHANNEL_ID: 'channel_id',
-            self.CHANNEL_USERNAME: 'channel_username',
-            self.CHANNEL_TITLE: 'channel_title',
-            self.ID: 'message_id',
-            self.MESSAGE: 'Message',
-            self.DATE: 'date',
-            self.Media_path: 'media_path'
-        }
-        
-        # Rename columns in the DataFrame
-        df.rename(columns=column_mapping, inplace=True)
-
-        # Create the cleaned file path
-        cleaned_file_path = file_path.replace('.csv', '_cleaned.csv')
-        df.to_csv(cleaned_file_path, index=False)
-        self.logger.info(f"Cleaned data saved to {cleaned_file_path}.")
-
-    def clean_telegram_data(self, file_path, image_directory):
-        """
-        Main function to clean Telegram data stored in a CSV file and remove corresponding duplicate images.
-
-        Args:
-            file_path (str): The path to the CSV file containing Telegram data.
-            image_directory (str): The directory path where images are stored.
-
-        Returns:
-            pd.DataFrame: A cleaned pandas DataFrame, or an empty DataFrame if cleaning fails.
-        """
-        try:
-            # Load the data
-            df = self.load_data(file_path)
-            if df.empty:
-                self.logger.error("No data loaded, cleaning process aborted.")
-                return df
-            
-            # Run cleaning steps
-            df = self.remove_duplicates(df, image_directory)
-            df = self.handle_missing_values(df)
-            df = self.standardize_formats(df)
-            df = self.validate_data(df)
-            
-            # Save cleaned data
-            self.save_cleaned_data(df, file_path)
-            
-            self.logger.info("Data cleaning completed successfully.")
-            return df
-
-        except Exception as e:
-            self.logger.error(f"An error occurred during the cleaning process: {str(e)}")
-            return pd.DataFrame()
-
-# Run the function
-if __name__ == '__main__':
-    # Class instance
-    cleaner = DataCleaner()
-    # Call the main telegram cleaner function
-    cleaner.clean_telegram_data('../data/telegram_data.csv', '../data/photos/')
+def save_cleaned_data(df, output_path):
+    """ Save cleaned data to a new CSV file. """
+    try:
+        df.to_csv(output_path, index=False)
+        logger.info(f"Cleaned data saved successfully to '{output_path}'.")
+        print(f"Cleaned data saved successfully to '{output_path}'.")
+    except Exception as e:
+        logger.error(f"Error saving cleaned data: {e}")
+        raise
