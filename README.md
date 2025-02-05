@@ -1,1 +1,3 @@
-# 10-Academy-Week-7
+# 10-Academy-Week-7\
+
+# dbt is so hard
