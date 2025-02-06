@@ -1,0 +1,74 @@
+version: 2
+
+sources:
+  - name: ethio_medical
+    schema: public
+    tables:
+      - name: transformed_medical_product
+models:
+  - name: transformed_channel
+    description: "Table containing transformed channel information."
+    columns:
+      - name: channel_username
+        description: "The username of the channel."
+        tests:
+          - not_null
+          - unique
+      - name: channel_title
+        description: "The title of the channel."
+        tests:
+          - not_null
+
+  - name: transformed_contact_number
+    description: "Table containing transformed contact numbers."
+    columns:
+      - name: channel_id
+        description: "The ID of the channel linked to the contact number."
+        tests:
+          - not_null
+          - unique
+      - name: contact_phone_numbers
+        description: "Phone numbers associated with the channel."
+        tests:
+          - not_null
+
+  - name: transformed_product
+    description: "Table containing transformed medical products data."
+    columns:
+      - name: product_id
+        description: "ID of the medical product."
+        tests:
+          - not_null
+      - name: price_in_birr
+        description: "Price of the product in Birr."
+        tests:
+          - not_null
+          - accepted_range:
+              min: 0  # Ensure the price is non-negative
+      - name: channel_id
+        description: "ID of the channel that listed the product."
+        tests:
+          - not_null
+          - relationships:
+              to: ref('transformed_channel')
+              field: channel_id
+      - name: date
+        description: "The date when the product information was listed."
+        tests:
+          - not_null
+
+  - name: transformed_product_images
+    description: "Table containing transformed product image paths."
+    columns:
+      - name: message_id
+        description: "The message ID associated with the product image."
+        tests:
+          - not_null
+          - unique
+          - relationships:
+              to: ref('transformed_product')
+              field: product_id
+      - name: image_path
+        description: "Path to the product image."
+        tests:
+          - not_null
